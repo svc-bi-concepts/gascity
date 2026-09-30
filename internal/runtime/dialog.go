@@ -759,11 +759,12 @@ func acceptWorkspaceTrustDialogFromStream(
 }
 
 func containsWorkspaceTrustDialog(content string) bool {
-	return strings.Contains(content, "trust this folder") ||
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "trust this folder") ||
 		strings.Contains(content, "Quick safety check") ||
-		strings.Contains(content, "Do you trust the contents of this directory?") ||
-		strings.Contains(content, "Do you trust the files in this folder?") ||
-		strings.Contains(content, "Trust project folder?")
+		strings.Contains(lower, "do you trust the contents of this directory?") ||
+		strings.Contains(lower, "do you trust the files in this folder?") ||
+		strings.Contains(lower, "trust project folder?")
 }
 
 // trustDialogLayout describes how one coding agent renders its
@@ -781,7 +782,17 @@ var claudeTrustDialogLayout = trustDialogLayout{
 	// captured pane uses "❯".
 	markers: []string{"❯"},
 	isTrustRow: func(label string) bool {
-		return strings.Contains(strings.ToLower(label), "trust this folder") && !strings.HasPrefix(label, "No")
+		lower := strings.ToLower(label)
+		return strings.Contains(lower, "trust this folder") && !strings.HasPrefix(lower, "no")
+	},
+}
+
+var codexTrustDialogLayout = trustDialogLayout{
+	markers: []string{"›", "❯", ">"},
+	isTrustRow: func(label string) bool {
+		return strings.EqualFold(strings.TrimSpace(label), "Trust and continue") ||
+			strings.EqualFold(strings.TrimSpace(label), "Yes, I trust this folder") ||
+			strings.EqualFold(strings.TrimSpace(label), "Yes, proceed")
 	},
 }
 
@@ -816,8 +827,16 @@ var piTrustDialogLayout = trustDialogLayout{
 // be pre-selected, including a "don't trust" option (the original bug, for
 // Claude).
 func workspaceTrustConfirmKeys(content string) ([]string, bool) {
+	lower := strings.ToLower(content)
 	switch {
-	case strings.Contains(content, "trust this folder") || strings.Contains(content, "Quick safety check"):
+	case strings.Contains(lower, "trust this folder") &&
+		strings.Contains(lower, "trust and continue") &&
+		strings.Contains(lower, "quit"):
+		return deriveTrustDialogKeys(content, "trust this folder", codexTrustDialogLayout)
+	case strings.Contains(lower, "do you trust the contents of this directory?") &&
+		(strings.Contains(lower, "trust and continue") || strings.Contains(lower, "yes, i trust this folder") || strings.Contains(lower, "yes, proceed")):
+		return deriveTrustDialogKeys(content, "do you trust the contents of this directory?", codexTrustDialogLayout)
+	case strings.Contains(lower, "trust this folder") || strings.Contains(content, "Quick safety check"):
 		// "Quick safety check" is the dialog's header line, so it anchors the
 		// scan above every option row. "trust this folder" is itself an option
 		// label, so it only anchors when the header isn't rendered.
@@ -826,11 +845,11 @@ func workspaceTrustConfirmKeys(content string) ([]string, bool) {
 			question = "trust this folder"
 		}
 		return deriveTrustDialogKeys(content, question, claudeTrustDialogLayout)
-	case strings.Contains(content, "Do you trust the files in this folder?"):
+	case strings.Contains(lower, "do you trust the files in this folder?"):
 		return deriveTrustDialogKeys(content, "Do you trust the files in this folder?", geminiTrustDialogLayout)
-	case strings.Contains(content, "Trust project folder?"):
+	case strings.Contains(lower, "trust project folder?"):
 		return deriveTrustDialogKeys(content, "Trust project folder?", piTrustDialogLayout)
-	case strings.Contains(content, "Do you trust the contents of this directory?"):
+	case strings.Contains(lower, "do you trust the contents of this directory?"):
 		return []string{"Enter"}, true
 	default:
 		return nil, false
@@ -868,7 +887,7 @@ func deriveTrustDialogKeys(content, question string, layout trustDialogLayout) (
 		}
 
 		if trustIdx == -1 {
-			label := strings.TrimSpace(strings.TrimLeft(trimmed, cutset))
+			label := stripOptionLabelPrefix(strings.TrimSpace(strings.TrimLeft(trimmed, cutset)))
 			if layout.isTrustRow(label) {
 				trustIdx = i
 			}
@@ -904,7 +923,10 @@ func deriveTrustDialogKeys(content, question string, layout trustDialogLayout) (
 func trustDialogWindow(content, question string) string {
 	i := strings.LastIndex(content, question)
 	if i < 0 {
-		return content
+		i = strings.LastIndex(strings.ToLower(content), strings.ToLower(question))
+		if i < 0 {
+			return content
+		}
 	}
 	if start := strings.LastIndexByte(content[:i], '\n'); start >= 0 {
 		return content[start+1:]
@@ -1215,11 +1237,8 @@ func acceptCodexHookReviewDialog(
 
 		if containsCodexHookReviewDialog(content) {
 			budget.observe()
-			if err := sendKeys("Down"); err != nil {
-				return err
-			}
-			sleep(ctx, bypassDialogConfirmDelay)
-			return sendKeys("Enter")
+			keys := codexHookReviewConfirmKeys(content)
+			return sendDialogKeys(ctx, sendKeys, keys, bypassDialogConfirmDelay)
 		}
 
 		if containsPromptIndicator(content) ||
@@ -1242,8 +1261,10 @@ func acceptCodexHookReviewDialogFromStream(
 	sendKeys func(keys ...string) error,
 ) (bool, error) {
 	return acceptDialogFromStream(ctx, timeout, snapshots, sendKeys, streamDialogSpec{
-		match:       containsCodexHookReviewDialog,
-		matchKeys:   []string{"Down", "Enter"},
+		match: containsCodexHookReviewDialog,
+		matchKeysFor: func(content string) ([]string, bool) {
+			return codexHookReviewConfirmKeys(content), true
+		},
 		matchDelay:  bypassDialogConfirmDelay,
 		ready:       containsPromptIndicator,
 		readyOrNext: containsPostCodexHookReviewStartupDialog,
@@ -1251,12 +1272,24 @@ func acceptCodexHookReviewDialogFromStream(
 }
 
 func containsCodexHookReviewDialog(content string) bool {
-	return (strings.Contains(content, "Hooks need review") ||
-		strings.Contains(content, "hooks need review")) &&
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "hooks need review") &&
 		(strings.Contains(content, "Trust all and continue") ||
-			strings.Contains(content, "trust all")) &&
+			strings.Contains(lower, "trust all")) &&
 		(strings.Contains(content, "Continue without trusting") ||
-			strings.Contains(content, "enter to review hooks"))
+			strings.Contains(lower, "enter to review hooks"))
+}
+
+func codexHookReviewConfirmKeys(content string) []string {
+	if keys, ok := deriveTrustDialogKeys(content, "Hooks need review", trustDialogLayout{
+		markers: []string{"›", "❯", ">"},
+		isTrustRow: func(label string) bool {
+			return strings.EqualFold(strings.TrimSpace(label), "Trust all and continue")
+		},
+	}); ok {
+		return keys
+	}
+	return []string{"Down", "Enter"}
 }
 
 func containsPostCodexHookReviewStartupDialog(content string) bool {
@@ -1861,6 +1894,9 @@ func linesContainAllWithin(content string, maxSpan int, subs ...string) bool {
 // present. Full-screen agent UIs often render placeholder input after the prompt
 // glyph, so Claude/Codex prompts are accepted as prefixes too.
 func containsPromptIndicator(content string) bool {
+	if containsBlockingStartupDialog(content) {
+		return false
+	}
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.ReplaceAll(line, "\u00a0", " ")
 		trimmed = strings.TrimRight(trimmed, " \t")
@@ -1888,6 +1924,19 @@ func containsPromptIndicator(content string) bool {
 	return false
 }
 
+func containsBlockingStartupDialog(content string) bool {
+	return containsThemeSelectionDialog(content) ||
+		containsClaudeResumeDialog(content) ||
+		containsCodexUpdateDialog(content) ||
+		containsWorkspaceTrustDialog(content) ||
+		containsExternalImportsDialog(content) ||
+		containsMCPTrustDialog(content) ||
+		containsCodexHookReviewDialog(content) ||
+		strings.Contains(content, "Bypass Permissions mode") ||
+		containsCustomAPIKeyDialog(content) ||
+		ContainsRateLimitDialog(content)
+}
+
 // stripLeadingBoxBorder removes a leading vertical box-drawing character (│/┃)
 // plus surrounding spaces, so a boxed prompt glyph (grok) is detected. No-op for
 // borderless lines.
@@ -1906,6 +1955,18 @@ func isNumberedMenuRow(content string) bool {
 		digits++
 	}
 	return digits > 0 && digits < len(content) && content[digits] == '.'
+}
+
+func stripOptionLabelPrefix(label string) string {
+	label = strings.TrimSpace(label)
+	digits := 0
+	for digits < len(label) && label[digits] >= '0' && label[digits] <= '9' {
+		digits++
+	}
+	if digits > 0 && digits+1 < len(label) && label[digits] == '.' {
+		return strings.TrimSpace(label[digits+1:])
+	}
+	return label
 }
 
 // sleep waits for the given duration or until ctx is canceled.

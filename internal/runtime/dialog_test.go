@@ -51,6 +51,11 @@ func TestContainsWorkspaceTrustDialog(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "codex 0.156 trust dialog",
+			content: "Trust this folder?\n› 1. Trust and continue\n  2. Quit",
+			want:    true,
+		},
+		{
 			name:    "gemini trust dialog",
 			content: "Do you trust the files in this folder?\n1. Trust folder",
 			want:    true,
@@ -102,6 +107,61 @@ func TestAcceptStartupDialogsAcceptsCodexTrustDialog(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sent, []string{"Enter"}) {
 		t.Fatalf("sent keys = %v, want [Enter]", sent)
+	}
+}
+
+func TestAcceptStartupDialogsSelectsCodexTrustDialogByLabel(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{
+			name: "trust already selected",
+			content: "Trust this folder?\n" +
+				"› 1. Trust and continue\n" +
+				"  2. Quit",
+			want: []string{"Enter"},
+		},
+		{
+			name: "quit selected",
+			content: "Trust this folder?\n" +
+				"  1. Trust and continue\n" +
+				"› 2. Quit",
+			want: []string{"Up", "Enter"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withZeroDialogTimings(t)
+			dialogPollTimeout = time.Second
+
+			var sent []string
+			err := AcceptStartupDialogs(
+				context.Background(),
+				func(_ int) (string, error) {
+					if len(sent) == 0 {
+						return tt.content, nil
+					}
+					if tt.name == "quit selected" && len(sent) == 1 && sent[0] == "Up" {
+						return "Trust this folder?\n" +
+							"› 1. Trust and continue\n" +
+							"  2. Quit", nil
+					}
+					return "› Implement {feature}", nil
+				},
+				func(keys ...string) error {
+					sent = append(sent, keys...)
+					return nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("AcceptStartupDialogs() error = %v", err)
+			}
+			if !reflect.DeepEqual(sent, tt.want) {
+				t.Fatalf("sent keys = %v, want %v", sent, tt.want)
+			}
+		})
 	}
 }
 
@@ -340,6 +400,63 @@ func TestAcceptStartupDialogsTrustsCodexHookReviewDialog(t *testing.T) {
 		t.Fatalf("AcceptStartupDialogs returned error: %v", err)
 	}
 	if got, want := strings.Join(sent, ","), "Down,Enter"; got != want {
+		t.Fatalf("sent keys = %q, want %q", got, want)
+	}
+}
+
+func TestAcceptStartupDialogsTrustsCodexHookReviewDialogWithVisibleInput(t *testing.T) {
+	withZeroDialogTimings(t)
+	dialogPollTimeout = time.Second
+
+	var sent []string
+	err := AcceptStartupDialogs(
+		context.Background(),
+		func(_ int) (string, error) {
+			if len(sent) == 0 {
+				return "› Implement {feature}\n\n" + codexHookReviewDialogFixture(), nil
+			}
+			return "› Implement {feature}", nil
+		},
+		func(keys ...string) error {
+			sent = append(sent, keys...)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("AcceptStartupDialogs returned error: %v", err)
+	}
+	if got, want := strings.Join(sent, ","), "Down,Enter"; got != want {
+		t.Fatalf("sent keys = %q, want %q", got, want)
+	}
+}
+
+func TestAcceptStartupDialogsTrustsCodexHookReviewDialogByLabel(t *testing.T) {
+	withZeroDialogTimings(t)
+	dialogPollTimeout = time.Second
+
+	var sent []string
+	err := AcceptStartupDialogs(
+		context.Background(),
+		func(_ int) (string, error) {
+			if len(sent) == 0 {
+				return "Hooks need review\n" +
+					"  4 hooks are new or changed.\n\n" +
+					"  1. Review hooks\n" +
+					"› 2. Trust all and continue\n" +
+					"  3. Continue without trusting (hooks won't run)\n\n" +
+					"  Press enter to confirm or esc to go back", nil
+			}
+			return "› Implement {feature}", nil
+		},
+		func(keys ...string) error {
+			sent = append(sent, keys...)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("AcceptStartupDialogs returned error: %v", err)
+	}
+	if got, want := strings.Join(sent, ","), "Enter"; got != want {
 		t.Fatalf("sent keys = %q, want %q", got, want)
 	}
 }
@@ -1223,6 +1340,8 @@ func TestContainsPromptIndicator(t *testing.T) {
 		{name: "codex prompt", content: "›", want: true},
 		{name: "codex prompt with nbsp", content: "›\u00a0", want: true},
 		{name: "codex prompt with placeholder", content: "› Improve documentation in @filename", want: true},
+		{name: "codex prompt under trust dialog", content: "Trust this folder?\n  1. Trust and continue\n  2. Quit\n› Implement {feature}", want: false},
+		{name: "codex prompt under hook review dialog", content: codexHookReviewDialogFixture() + "\n› Implement {feature}", want: false},
 		{name: "claude prompt with text", content: "❯ run tests", want: true},
 		{name: "boxed grok prompt", content: "│ ❯ ", want: true},
 		{name: "boxed grok prompt with text", content: "│ ❯ start working", want: true},
