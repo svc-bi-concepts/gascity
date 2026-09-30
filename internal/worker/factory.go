@@ -243,16 +243,24 @@ func (f *Factory) HandleForTarget(target string, processNames []string) (Handle,
 // RuntimeHandle constructs a runtime-only worker handle using the factory's
 // configured provider and recorder.
 func (f *Factory) RuntimeHandle(sessionName, providerName, transport string, processNames []string) (Handle, error) {
+	return f.RuntimeHandleWithFamily(sessionName, providerName, "", transport, processNames)
+}
+
+// RuntimeHandleWithFamily is RuntimeHandle for callers that know the built-in
+// family the provider resolves to, so family-gated behavior such as live
+// nudge delivery follows the family rather than the provider's literal name.
+func (f *Factory) RuntimeHandleWithFamily(sessionName, providerName, providerFamily, transport string, processNames []string) (Handle, error) {
 	if f.provider == nil {
 		return nil, sessionpkg.ErrSessionNotFound
 	}
 	return NewRuntimeHandle(RuntimeHandleConfig{
-		Provider:     f.provider,
-		SessionName:  sessionName,
-		ProviderName: providerName,
-		Transport:    transport,
-		ProcessNames: append([]string(nil), processNames...),
-		Recorder:     f.recorder,
+		Provider:       f.provider,
+		SessionName:    sessionName,
+		ProviderName:   providerName,
+		ProviderFamily: providerFamily,
+		Transport:      transport,
+		ProcessNames:   append([]string(nil), processNames...),
+		Recorder:       f.recorder,
 	})
 }
 

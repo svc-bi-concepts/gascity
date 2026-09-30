@@ -490,7 +490,11 @@ func runtimeWorkerHandleWithConfig(
 	if err != nil {
 		return nil, err
 	}
-	return factory.RuntimeHandle(sessionName, providerName, transport, processNames)
+	var providerFamily string
+	if cfg != nil {
+		providerFamily = config.BuiltinFamily(providerName, cfg.Providers)
+	}
+	return factory.RuntimeHandleWithFamily(sessionName, providerName, providerFamily, transport, processNames)
 }
 
 func workerKillSessionTargetWithConfig(cityPath string, store beads.Store, sp runtime.Provider, cfg *config.City, target string) error {

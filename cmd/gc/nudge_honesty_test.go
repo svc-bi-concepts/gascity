@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/nudgequeue"
+	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/worker"
 )
 
@@ -118,5 +120,45 @@ func TestManagedNudgeWakeReportsASkippedWake(t *testing.T) {
 	}
 	if !strings.Contains(warnings.String(), "no session store") {
 		t.Fatalf("warnings = %q, want the missing precondition named", warnings.String())
+	}
+}
+
+// TestRuntimeWorkerHandleNudgeFollowsProviderFamily: a city provider that
+// inherits from the claude built-in takes live delivery like claude itself,
+// while a provider with another family keeps reporting it as unsupported.
+func TestRuntimeWorkerHandleNudgeFollowsProviderFamily(t *testing.T) {
+	claudeBase := "builtin:claude"
+	cfg := &config.City{Providers: map[string]config.ProviderSpec{
+		"claude-sonnet": {Base: &claudeBase, Command: "claude"},
+	}}
+	for _, tc := range []struct {
+		provider      string
+		wantDelivered bool
+	}{
+		{provider: "claude-sonnet", wantDelivered: true},
+		{provider: "claude", wantDelivered: true},
+		{provider: "codex", wantDelivered: false},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			sp := runtime.NewFake()
+			if err := sp.Start(context.Background(), "worker-1", runtime.Config{}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			sp.WaitForIdleErrors["worker-1"] = nil
+			handle, err := runtimeWorkerHandleWithConfig(t.TempDir(), nil, sp, cfg, "worker-1", tc.provider, "", nil)
+			if err != nil {
+				t.Fatalf("runtimeWorkerHandleWithConfig: %v", err)
+			}
+			result, err := handle.Nudge(context.Background(), worker.NudgeRequest{Text: "stop now", Delivery: worker.NudgeDeliveryWaitIdle})
+			if err != nil {
+				t.Fatalf("Nudge: %v", err)
+			}
+			if result.Delivered != tc.wantDelivered {
+				t.Fatalf("Delivered = %v (undelivered %q), want %v", result.Delivered, result.Undelivered, tc.wantDelivered)
+			}
+			if !tc.wantDelivered && result.Undelivered != worker.NudgeUndeliveredProviderUnsupported {
+				t.Fatalf("Undelivered = %q, want %q", result.Undelivered, worker.NudgeUndeliveredProviderUnsupported)
+			}
+		})
 	}
 }

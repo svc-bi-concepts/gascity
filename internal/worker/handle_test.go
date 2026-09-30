@@ -1879,6 +1879,72 @@ func TestRuntimeHandleNudgeWaitIdleUnsupportedProviderReturnsUndelivered(t *test
 	}
 }
 
+func TestRuntimeHandleNudgeWaitIdleDeliversForClaudeFamilyAlias(t *testing.T) {
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	sp.WaitForIdleErrors["legacy-worker"] = nil
+
+	handle, err := NewRuntimeHandle(RuntimeHandleConfig{
+		Provider:       sp,
+		SessionName:    "legacy-worker",
+		ProviderName:   "claude-sonnet",
+		ProviderFamily: "claude",
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeHandle: %v", err)
+	}
+
+	result, err := handle.Nudge(context.Background(), NudgeRequest{
+		Text:     "stop now",
+		Delivery: NudgeDeliveryWaitIdle,
+	})
+	if err != nil {
+		t.Fatalf("Nudge(wait_idle): %v", err)
+	}
+	if !result.Delivered {
+		t.Fatalf("Nudge(wait_idle) = %#v, want live delivery for a claude-family alias", result)
+	}
+	var nudgeNow int
+	for _, call := range sp.Calls {
+		if call.Method == "NudgeNow" {
+			nudgeNow++
+		}
+	}
+	if nudgeNow != 1 {
+		t.Fatalf("NudgeNow calls = %d, want 1", nudgeNow)
+	}
+}
+
+func TestRuntimeHandleNudgeWaitIdleRejectsNonClaudeFamilyDespiteName(t *testing.T) {
+	sp := runtime.NewFake()
+	if err := sp.Start(context.Background(), "legacy-worker", runtime.Config{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	handle, err := NewRuntimeHandle(RuntimeHandleConfig{
+		Provider:       sp,
+		SessionName:    "legacy-worker",
+		ProviderName:   "claude",
+		ProviderFamily: "codex",
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeHandle: %v", err)
+	}
+
+	result, err := handle.Nudge(context.Background(), NudgeRequest{
+		Text:     "stop now",
+		Delivery: NudgeDeliveryWaitIdle,
+	})
+	if err != nil {
+		t.Fatalf("Nudge(wait_idle): %v", err)
+	}
+	if result.Delivered || result.Undelivered != NudgeUndeliveredProviderUnsupported {
+		t.Fatalf("Nudge(wait_idle) = %#v, want %s", result, NudgeUndeliveredProviderUnsupported)
+	}
+}
+
 func TestSessionCatalogUsesWorkerBoundary(t *testing.T) {
 	store := beads.NewMemStore()
 	sp := runtime.NewFake()
