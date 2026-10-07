@@ -197,3 +197,35 @@ func TestFilterUnreadyHookCandidatesKeepsNonHoldLabels(t *testing.T) {
 			beadmeta.DispatchHoldLabels, got)
 	}
 }
+
+// TestFilterUnreadyHookCandidatesDropsWorkflowRoots pins gp-ix866: an expanded
+// graph.v2 workflow ROOT (gc.kind=workflow, gc.workflow_expanded=true) is a tracking bead owned by the control
+// dispatcher, never work. Serving it handed a second pool session the root of a
+// run whose implement step was already held by another worker (its short lease
+// had lapsed during a long bridge run), producing duplicate workers.
+func TestFilterUnreadyHookCandidatesDropsWorkflowRoots(t *testing.T) {
+	in := `[
+		{"id":"root","status":"open","metadata":{"` + beadmeta.KindMetadataKey + `":"` + beadmeta.KindWorkflow + `","gc.workflow_expanded":"true"}},
+		{"id":"root-ip","status":"in_progress","metadata":{"` + beadmeta.KindMetadataKey + `":"` + beadmeta.KindWorkflow + `","gc.workflow_expanded":"true"}},
+		{"id":"root-only","status":"open","metadata":{"` + beadmeta.KindMetadataKey + `":"` + beadmeta.KindWorkflow + `","gc.run_target":"worker"}},
+		{"id":"scope","status":"open","metadata":{"` + beadmeta.KindMetadataKey + `":"` + beadmeta.KindScope + `"}},
+		{"id":"plain","status":"open","metadata":{"gc.routed_to":"claude-sonnet"}},
+		{"id":"nometa","status":"open"},
+		{"id":"nullmeta","status":"open","metadata":null}
+	]`
+	got := filterUnreadyHookCandidates(in, time.Now())
+
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(got), &rows); err != nil {
+		t.Fatalf("filtered output is not a JSON array: %v (output %q)", err, got)
+	}
+	want := []string{"root-only", "scope", "plain", "nometa", "nullmeta"}
+	if len(rows) != len(want) {
+		t.Fatalf("kept %d rows, want %d (workflow roots must be dropped, root-only molecules and everything else kept): %s", len(rows), len(want), got)
+	}
+	for i, id := range want {
+		if rows[i]["id"] != id {
+			t.Fatalf("row %d id = %v, want %q: %s", i, rows[i]["id"], id, got)
+		}
+	}
+}

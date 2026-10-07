@@ -1162,6 +1162,9 @@ func filterUnreadyHookCandidates(output string, now time.Time) string {
 		if isHeldHookCandidate(obj) {
 			continue
 		}
+		if isWorkflowRootHookCandidate(obj) {
+			continue
+		}
 		filtered = append(filtered, obj)
 	}
 	reencoded, err := json.Marshal(filtered)
@@ -1338,6 +1341,30 @@ func isHeldHookCandidate(item map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// isWorkflowRootHookCandidate reports whether item is an EXPANDED workflow
+// ROOT (gc.kind=workflow with gc.workflow_expanded=true). Such a root only
+// tracks its run; the work lives in its child step beads
+// (workflowRunTargetFallbackEligible already refuses to claim one). Serving it
+// as pool work gave a second session the same run while a step's holder was
+// still alive but its short lease had lapsed during a long wait (gp-ix866:
+// duplicate Fable workers, duplicate bridge loops, host-port collisions).
+// Dropping it here also keeps it from creating pool demand, since demand reuses
+// this filter. A root-only (#2763-shape) molecule has no children, carries no
+// expanded stamp, and stays claimable. Absent or null metadata fails open, like
+// the projections above.
+func isWorkflowRootHookCandidate(item map[string]any) bool {
+	meta, ok := item["metadata"].(map[string]any)
+	if !ok {
+		return false
+	}
+	kind, _ := meta[beadmeta.KindMetadataKey].(string)
+	if strings.TrimSpace(kind) != beadmeta.KindWorkflow {
+		return false
+	}
+	expanded, _ := meta[beadmeta.WorkflowExpandedMetadataKey].(string)
+	return strings.TrimSpace(expanded) == "true"
 }
 
 // isClosedHookCandidate reports whether item is a closed bead. Defense-in-depth
